@@ -3,7 +3,10 @@ const router = express.Router();
 const DeviceController = require('../controllers/DeviceController');
 const authMiddleware = require('../middleware/authMiddleware');
 
-// Route for authenticated Sub Admin to assign a device to a user
+// Register a new device (only sub_admins)
+router.post('/register', authMiddleware.isAuthenticated, authMiddleware.isSubAdmin, DeviceController.registerDevice);
+
+// Assign device to users
 router.post('/assign', authMiddleware.isAuthenticated, authMiddleware.isSubAdmin, DeviceController.assignDeviceToUser);
 
 module.exports = router;
