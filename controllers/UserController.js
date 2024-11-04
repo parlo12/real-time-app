@@ -26,19 +26,48 @@ exports.loginUser = async (req, res) => {
         const user = await User.findOne({ email });
 
         if (user) {
-            // Generate a JWT with the userId and role as the payload
             const token = jwt.sign(
                 { userId: user._id, role: user.role },
-                process.env.JWT_SECRET,  // Secret key for signing the token
-                { expiresIn: '1h' }      // Token expires in 1 hour
+                process.env.JWT_SECRET,  
+                { expiresIn: '1h' } // Access token expires in 1 hour
             );
 
-            res.json({ message: 'Login successful', token });
-            console.log('JWT_SECRET:', process.env.JWT_SECRET);
+            // Generate refresh token (with a longer expiry, e.g., 7 days)
+            const refreshToken = jwt.sign(
+                { userId: user._id, role: user.role },
+                process.env.JWT_SECRET,
+                { expiresIn: '7d' } 
+            );
+
+            res.json({ message: 'Login successful', token, refreshToken });
         } else {
             res.status(404).json({ error: 'User not found' });
         }
     } catch (error) {
         res.status(500).json({ error: 'Failed to login', details: error.message });
     }
+};
+
+// Refresh token endpoint
+exports.refreshToken = async (req, res) => {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+        return res.status(403).json({ error: 'No refresh token provided' });
+    }
+
+    // Verify the refresh token
+    jwt.verify(refreshToken, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(403).json({ error: 'Invalid or expired refresh token' });
+        }
+
+        // Generate a new access token
+        const newToken = jwt.sign(
+            { userId: decoded.userId, role: decoded.role },
+            process.env.JWT_SECRET,
+            { expiresIn: '1h' } // Set new access token expiry
+        );
+
+        res.json({ message: 'Token refreshed', token: newToken });
+    });
 };
