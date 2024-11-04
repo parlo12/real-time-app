@@ -8,5 +8,7 @@ router.get('/all', authMiddleware.isAuthenticated, MessageController.getAllMessa
 router.patch('/:messageId/delivered', authMiddleware.isAuthenticated, MessageController.setMessageDelivered); // Set to delivered
 router.patch('/:messageId/read', authMiddleware.isAuthenticated, MessageController.setMessageRead); // Set to read
 router.patch('/:messageId/failed', authMiddleware.isAuthenticated, MessageController.setMessageFailed); // Explicitly set to failed
+// messageRoutes.js
+router.post('/process-pending', authMiddleware.isAuthenticated, MessageController.processPendingMessages); // Process pending messages
 
 module.exports = router;

@@ -1,20 +1,10 @@
 const Message = require('../models/Message');
+const User = require('../models/User');
+const Device = require('../models/Device');
 
-// // Send a new message
-// exports.sendMessage = async (req, res) => {
-//     try {
-//         const { sender, receiver, content, userId, deviceId } = req.body;
-        
-//         // Create a new message with both the userId and deviceId included
-//         const message = new Message({ sender, receiver, content, userId, deviceId });
-//         await message.save();
-        
-//         res.status(201).json({ message: 'Message sent successfully', data: message });
-//     } catch (error) {
-//         console.error('Error in sendMessage:', error);
-//         res.status(500).json({ error: 'Failed to send message', details: error.message });
-//     }
-// };
+// Queue to hold pending messages
+const queue = []; // Queue to manage message processing
+this.processing = false; // Flag to track if processing is ongoing
 
 // Get all messages
 exports.getAllMessages = async (req, res) => {
@@ -89,13 +79,6 @@ exports.sendMessage = async (req, res) => {
     }
 };
 
-// Helper function to simulate sending a message (replace with actual sending logic)
-const simulateSendMessage = async (message) => {
-    // Simulate success or failure with a random outcome for demonstration
-    const isSuccess = Math.random() > 0.3; // 70% chance of success
-    return { success: isSuccess };
-};
-
 // Set message status to 'delivered'
 exports.setMessageDelivered = async (req, res) => {
     try {
@@ -140,9 +123,80 @@ exports.setMessageFailed = async (req, res) => {
             return res.status(404).json({ error: 'Message not found' });
         }
 
-        req.io.emit('messageStatusUpdate', { messageId, status: 'failed' });
+        // req.io.emit('messageStatusUpdate', { messageId, status: 'failed' });
+        req.io.emit('messageStatusUpdate', { messageId: message._id, status: message.status });
         res.json({ message: 'Message status updated to failed', data: message });
     } catch (error) {
         res.status(500).json({ error: 'Failed to update message status', details: error.message });
     }
+};
+
+// Process pending messages
+
+// Process pending messages
+exports.processPendingMessages = async (req, res) => {
+    try {
+        const { io } = req; // Capture io from req
+
+        // Retrieve all messages with a "pending" status
+        const pendingMessages = await Message.find({ status: 'pending' }).limit(10);
+
+        if (pendingMessages.length === 0) {
+            return res.json({ message: 'No pending messages to process' });
+        }
+
+        // Add messages to the queue
+        queue.push(...pendingMessages);
+
+        // Start processing if not already started
+        if (!processing) {
+            processMessages(io); // Pass io to the internal function
+        }
+
+        res.json({ message: 'Processing pending messages', data: pendingMessages });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to process pending messages', details: error.message });
+    }
+};
+
+// Function to process messages from the queue
+function processMessages(io) {
+    if (queue.length === 0) {
+        processing = false; // Stop processing if the queue is empty
+        return;
+    }
+
+    processing = true; // Set processing flag
+
+    const message = queue.shift(); // Get the next message
+
+    // Simulate message sending and set status
+    simulateSendMessage(message)
+        .then(async (sendResult) => {
+            if (sendResult.success) {
+                message.status = 'delivered';
+            } else {
+                message.status = 'failed'; // Leave as failed if unsuccessful
+            }
+            await message.save();
+
+            io.emit('messageStatusUpdate', { messageId: message._id, status: message.status });
+
+            // Process the next message after a 5-second delay
+            setTimeout(() => {
+                processMessages(io);
+            }, 5000);
+        })
+        .catch(async (error) => {
+            console.error('Error processing message:', error.message);
+            message.status = 'failed';
+            await message.save();
+            processMessages(io); // Continue to next even if an error occurs
+        });
+}
+
+// Helper function to simulate sending a message (replace with actual sending logic)
+const simulateSendMessage = async (message) => {
+    const isSuccess = Math.random() > 0.3; // 70% chance of success
+    return { success: isSuccess };
 };

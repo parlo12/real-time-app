@@ -39,7 +39,7 @@ exports.loginUser = async (req, res) => {
                 { expiresIn: '7d' } 
             );
 
-            res.json({ message: 'Login successful', token, refreshToken });
+            res.json({ message: 'Login successful', token, refreshToken, data: user });
         } else {
             res.status(404).json({ error: 'User not found' });
         }
