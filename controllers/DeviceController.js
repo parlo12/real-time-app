@@ -4,17 +4,25 @@ const User = require('../models/User');
 // Register a new device - only allowed for sub_admins
 exports.registerDevice = async (req, res) => {
     try {
-        const { subAdminId, deviceName } = req.body;
-        const user = await User.findById(subAdminId);
+        const { subAdminId, phoneNumber, model, sim } = req.body;
 
         // Verify that the requester is a sub_admin
+        const user = await User.findById(subAdminId);
         if (!user || user.role !== 'sub_admin') {
             return res.status(403).json({ error: 'Only sub_admins can register devices' });
         }
 
+        // Check if the device with the same phone number already exists
+        const existingDevice = await Device.findOne({ phoneNumber });
+        if (existingDevice) {
+            return res.status(400).json({ error: 'Device with this phone number already exists' });
+        }
+
         // Create the device associated with the sub_admin
         const device = new Device({
-            deviceName,
+            phoneNumber,
+            model,
+            sim,
             userId: subAdminId, // Assign the sub_admin ID as the owner
             userIds: [] // Initialize with an empty array for user assignment
         });
