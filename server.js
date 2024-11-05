@@ -6,6 +6,7 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const Device = require('./models/Device'); 
+const Message = require('./models/Message'); // <-- Import Message model
 const messageRoutes = require('./routes/messageRoutes');
 const userRoutes = require('./routes/userRoutes');
 const deviceRoutes = require('./routes/deviceRoutes');
@@ -44,21 +45,64 @@ app.use('/messages', messageRoutes);
 app.use('/users', userRoutes);
 app.use('/devices', deviceRoutes);
 
-// WebSocket event for new connections
 io.on('connection', (socket) => {
     console.log('New client connected:', socket.id);
     socket.emit('message', 'Welcome to the chat!');
 
     // Handle incoming messages and broadcast to all clients
-    socket.on('message', (message) => {
-        console.log('Message received on server:', message);
-        io.emit('message', message);
+    socket.on('message', async (messageData) => {
+        console.log('Message received on server:', messageData);
+
+        // Save the message to the database with an initial status of 'sent'
+        const message = new Message({
+            sender: messageData.sender,
+            receiver: messageData.receiver,
+            content: messageData.content,
+            status: 'sent',
+            userId: messageData.userId,
+            deviceId: messageData.deviceId
+        });
+
+        await message.save();
+
+        // Emit the `messageSent` event to all clients
+        io.emit('messageSent', { messageId: message._id, status: 'sent' });
     });
 
-    // Handle private messages
-    socket.on('private message', (message) => {
-        console.log('Private message received on server:', message);
-        io.to(message.to).emit('message', message);
+    // Handle 'messageDelivered' event
+    socket.on('messageDelivered', async (data) => {
+        const { messageId } = data;
+        try {
+            const message = await Message.findByIdAndUpdate(
+                messageId,
+                { status: 'delivered' },
+                { new: true }
+            );
+
+            if (message) {
+                io.emit('messageStatusUpdate', { messageId, status: 'delivered' });
+            }
+        } catch (error) {
+            console.error('Error updating message to delivered:', error.message);
+        }
+    });
+
+    // Handle 'messageRead' event
+    socket.on('messageRead', async (data) => {
+        const { messageId } = data;
+        try {
+            const message = await Message.findByIdAndUpdate(
+                messageId,
+                { status: 'read' },
+                { new: true }
+            );
+
+            if (message) {
+                io.emit('messageStatusUpdate', { messageId, status: 'read' });
+            }
+        } catch (error) {
+            console.error('Error updating message to read:', error.message);
+        }
     });
 
     // Device activity handling with validation
