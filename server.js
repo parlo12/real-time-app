@@ -44,7 +44,6 @@ app.use((req, res, next) => {
 app.use('/messages', messageRoutes);
 app.use('/users', userRoutes);
 app.use('/devices', deviceRoutes);
-
 io.on('connection', (socket) => {
     console.log('New client connected:', socket.id);
     socket.emit('message', 'Welcome to the chat!');
@@ -53,7 +52,6 @@ io.on('connection', (socket) => {
     socket.on('message', async (messageData) => {
         console.log('Message received on server:', messageData);
 
-        // Save the message to the database with an initial status of 'sent'
         const message = new Message({
             sender: messageData.sender,
             receiver: messageData.receiver,
@@ -65,7 +63,6 @@ io.on('connection', (socket) => {
 
         await message.save();
 
-        // Emit the `messageSent` event to all clients
         io.emit('messageSent', { messageId: message._id, status: 'sent' });
     });
 
@@ -105,6 +102,17 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Handle 'getPendingMessages' event, respond only to the requesting client
+    socket.on('getPendingMessages', async () => {
+        try {
+            const pendingMessages = await Message.find({ status: 'pending' });
+            socket.emit('pendingMessages', pendingMessages);  // Emit only to the requesting client
+        } catch (error) {
+            console.error('Error retrieving pending messages:', error.message);
+            socket.emit('error', { message: 'Failed to retrieve pending messages' });
+        }
+    });
+
     // Device activity handling with validation
     socket.on('deviceActivity', async (activity) => {
         try {
@@ -134,7 +142,6 @@ io.on('connection', (socket) => {
         console.log('Client disconnected:', socket.id);
     });
 });
-
 // Define a basic route to verify server is running
 app.get('/', (req, res) => {
     res.send('WebSocket API server is running');
