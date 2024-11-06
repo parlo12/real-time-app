@@ -9,6 +9,7 @@ const Device = require('./models/Device');
 const Message = require('./models/Message'); // <-- Import Message model
 const messageRoutes = require('./routes/messageRoutes');
 const userRoutes = require('./routes/userRoutes');
+const User = require('./models/User'); // <-- Import User model
 const deviceRoutes = require('./routes/deviceRoutes');
 
 // Load environment variables from .env file
@@ -44,11 +45,19 @@ app.use((req, res, next) => {
 app.use('/messages', messageRoutes);
 app.use('/users', userRoutes);
 app.use('/devices', deviceRoutes);
+
 io.on('connection', (socket) => {
     console.log('New client connected:', socket.id);
-    socket.emit('message', 'Welcome to the chat!');
 
-    // Handle incoming messages and broadcast to all clients
+    // Handle joining a room when the user connects and identifies themselves
+    socket.on('joinRoom', ({ userId, role }) => {
+        // Join a room based on the user's ID
+        const roomId = userId.toString();
+        socket.join(roomId);
+        console.log(`User ${userId} with role ${role} joined room ${roomId}`);
+    });
+
+    // Handle incoming messages and broadcast only to relevant clients
     socket.on('message', async (messageData) => {
         console.log('Message received on server:', messageData);
 
@@ -63,7 +72,22 @@ io.on('connection', (socket) => {
 
         await message.save();
 
-        io.emit('messageSent', { messageId: message._id, status: 'sent' });
+        try {
+            // Find the associated user and populate subAdminId
+            const user = await User.findById(messageData.userId).populate('subAdminId');
+    
+            if (user && user.subAdminId) {
+                const subAdminId = user.subAdminId._id;
+    
+                // Notify the specific user and the associated sub-admin only
+                io.to(messageData.userId.toString()).emit('messageSent', { messageId: message._id, status: 'sent' });
+                io.to(subAdminId.toString()).emit('messageSent', { messageId: message._id, status: 'sent' });
+            } else {
+                console.error('Sub-admin not found for user:', messageData.userId);
+            }
+        } catch (error) {
+            console.error('Error retrieving sub-admin for user:', error.message);
+        }
     });
 
     // Handle 'messageDelivered' event
@@ -77,7 +101,9 @@ io.on('connection', (socket) => {
             );
 
             if (message) {
-                io.emit('messageStatusUpdate', { messageId, status: 'delivered' });
+                // Notify only the relevant user and sub-admin
+                io.to(message.userId.toString()).emit('messageStatusUpdate', { messageId, status: 'delivered' });
+                io.to(message.userId.subAdminId.toString()).emit('messageStatusUpdate', { messageId, status: 'delivered' });
             }
         } catch (error) {
             console.error('Error updating message to delivered:', error.message);
@@ -95,7 +121,8 @@ io.on('connection', (socket) => {
             );
 
             if (message) {
-                io.emit('messageStatusUpdate', { messageId, status: 'read' });
+                io.to(message.userId.toString()).emit('messageStatusUpdate', { messageId, status: 'read' });
+                io.to(message.userId.subAdminId.toString()).emit('messageStatusUpdate', { messageId, status: 'read' });
             }
         } catch (error) {
             console.error('Error updating message to read:', error.message);
@@ -113,35 +140,12 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Device activity handling with validation
-    socket.on('deviceActivity', async (activity) => {
-        try {
-            if (!mongoose.Types.ObjectId.isValid(activity.deviceId)) {
-                console.log('Invalid deviceId format:', activity.deviceId);
-                socket.emit('error', { message: 'Invalid device ID format.' });
-                return;
-            }
-
-            const device = await Device.findById(activity.deviceId);
-
-            if (!device) {
-                console.log('Device not registered:', activity.deviceId);
-                socket.emit('error', { message: 'Device not registered in the system.' });
-                return;
-            }
-
-            console.log('Device activity:', activity);
-            io.emit('deviceActivity', activity);
-        } catch (error) {
-            console.error('Error checking device activity:', error.message);
-        }
-    });
-
     // Handle disconnection
     socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);
     });
 });
+
 // Define a basic route to verify server is running
 app.get('/', (req, res) => {
     res.send('WebSocket API server is running');
