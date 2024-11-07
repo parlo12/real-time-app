@@ -113,6 +113,7 @@ io.on('connection', (socket) => {
                 messageId: message._id,
             
         });
+        console.log('Message sent to user:', messageData.userId);
 
             const user = await User.findById(messageData.userId).populate('subAdminId');
             if (user && user.subAdminId) {
