@@ -95,7 +95,9 @@ io.on('connection', (socket) => {
             content: messageData.content,
             status: 'sent',
             userId: messageData.userId,
-            deviceId: deviceId // Apply default or valid deviceId
+            deviceId: deviceId, // Apply default or valid deviceId
+            threadId: messageData.threadId || null, // Use existing threadId if provided
+            origin: messageData.origin || 'CRM' // Assume CRM as the origin if not provided
         });
 
         try {
@@ -115,6 +117,39 @@ io.on('connection', (socket) => {
         } catch (error) {
             console.error('Error saving message:', error.message);
             socket.emit('error', { message: 'Failed to save message' });
+        }
+    });
+
+    // Handle 'replyMessage' event to handle replies
+    socket.on('replyMessage', async (replyData) => {
+        const { originalMessageId, content, userId, origin } = replyData;
+
+        try {
+            const originalMessage = await Message.findById(originalMessageId);
+            if (!originalMessage) {
+                console.error('Original message not found.');
+                return;
+            }
+
+            const replyMessage = new Message({
+                sender: userId,
+                receiver: originalMessage.sender,
+                content: content,
+                status: 'sent',
+                userId: userId,
+                deviceId: originalMessage.deviceId,
+                threadId: originalMessage.threadId || originalMessage._id, // Link to the original message's thread
+                origin: origin || 'CRM' // Default to CRM if origin not specified
+            });
+
+            await replyMessage.save();
+
+            // Emit to both the original sender's and receiver's rooms
+            io.to(originalMessage.sender.toString()).emit('newReply', replyMessage);
+            io.to(userId.toString()).emit('newReply', replyMessage);
+
+        } catch (error) {
+            console.error('Error handling reply message:', error.message);
         }
     });
 
