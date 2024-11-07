@@ -107,9 +107,14 @@ io.on('connection', (socket) => {
 
             // need to know which service is sending message is it CRM or Android
            //event emit to userID
-            socket.emit(messageData.userId.toString, { 
-                ...message, 
+            io.emit(`${messageData.userId}`, { 
                 messageId: message._id,
+                status: 'sent',
+                content: message.content,
+                sender: message.sender,
+                receiver: message.receiver,
+                origin: message.origin,
+
             });
                 console.log('Message sent to user:', messageData.userId);
 
