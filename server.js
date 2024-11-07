@@ -100,8 +100,19 @@ io.on('connection', (socket) => {
             origin: messageData.origin || 'CRM' // Assume CRM as the origin if not provided
         });
 
+    
+
         try {
             await message.save();
+
+            // need to know which service is sending message is it CRM or Android
+           //event emit to userID
+            io.to(messageData.userId.toString()).emit(messageData.userId.toString, { 
+                
+                ...message, 
+                messageId: message._id,
+            
+        });
 
             const user = await User.findById(messageData.userId).populate('subAdminId');
             if (user && user.subAdminId) {
