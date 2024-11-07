@@ -107,13 +107,11 @@ io.on('connection', (socket) => {
 
             // need to know which service is sending message is it CRM or Android
            //event emit to userID
-        io.emit(messageData.userId.toString, { 
-                
+            socket.emit(messageData.userId.toString, { 
                 ...message, 
                 messageId: message._id,
-            
-        });
-        console.log('Message sent to user:', messageData.userId);
+            });
+                console.log('Message sent to user:', messageData.userId);
 
             const user = await User.findById(messageData.userId).populate('subAdminId');
             if (user && user.subAdminId) {
