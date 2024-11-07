@@ -7,6 +7,7 @@ const MessageSchema = new mongoose.Schema({
     status: { type: String, enum: ['sent', 'failed', 'pending', 'delivered'], default: 'pending' },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     deviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Device', required: false },
+    origin: { type: String, enum: ['CRM', 'API', 'Web','Android'], default: 'CRM' },
     createdAt: { type: Date, default: Date.now }
 });
 
