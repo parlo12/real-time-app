@@ -48,7 +48,6 @@ exports.sendMessage = async (req, res) => {
 
         // Create message with initial status 'pending'
         const message = new Message({
-            messageId: message._id,
             sender,
             receiver,
             content,
