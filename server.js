@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const Device = require('./models/Device'); 
+const Device = require('./models/Device');
 const Message = require('./models/Message'); // <-- Import Message model
 const messageRoutes = require('./routes/messageRoutes');
 const userRoutes = require('./routes/userRoutes');
@@ -51,42 +51,70 @@ io.on('connection', (socket) => {
 
     // Handle joining a room when the user connects and identifies themselves
     socket.on('joinRoom', ({ userId, role }) => {
-        // Join a room based on the user's ID
         const roomId = userId.toString();
         socket.join(roomId);
         console.log(`User ${userId} with role ${role} joined room ${roomId}`);
     });
 
-    // Handle incoming messages and broadcast only to relevant clients
+    // Ensure `getAllMessages` receives `userId` and `role`
+    socket.on('getAllMessages', async (data = {}) => {
+        const { userId, role } = data;
+
+        if (!userId || !role) {
+            console.error("User ID or role missing for 'getAllMessages' event");
+            socket.emit('error', { message: 'User ID and role are required to fetch messages' });
+            return;
+        }
+
+        try {
+            let messages;
+            if (role === 'super_admin') {
+                messages = await Message.find(); // Fetch all messages for super admin
+            } else {
+                messages = await Message.find({
+                    $or: [{ userId: userId }, { receiver: userId }]
+                });
+            }
+            socket.emit('allMessages', messages);
+        } catch (error) {
+            console.error('Error fetching all messages:', error.message);
+            socket.emit('error', { message: 'Failed to retrieve all messages' });
+        }
+    });
+
+    // Handle the 'message' event with default handling for `deviceId`
     socket.on('message', async (messageData) => {
         console.log('Message received on server:', messageData);
 
+        // Check if deviceId is valid or use a default value (e.g., `null` if optional)
+        const deviceId = mongoose.isValidObjectId(messageData.deviceId) ? messageData.deviceId : null;
+
         const message = new Message({
             sender: messageData.sender,
-            receiver: messageData.receiver,
+            receiver: messageData.receiver || 'Unknown', // Use "Unknown" if receiver is not provided
             content: messageData.content,
             status: 'sent',
             userId: messageData.userId,
-            deviceId: messageData.deviceId
+            deviceId: deviceId // Apply default or valid deviceId
         });
 
-        await message.save();
-
         try {
-            // Find the associated user and populate subAdminId
+            await message.save();
+
             const user = await User.findById(messageData.userId).populate('subAdminId');
-    
             if (user && user.subAdminId) {
                 const subAdminId = user.subAdminId._id;
-    
-                // Notify the specific user and the associated sub-admin only
                 io.to(messageData.userId.toString()).emit('messageSent', { messageId: message._id, status: 'sent' });
                 io.to(subAdminId.toString()).emit('messageSent', { messageId: message._id, status: 'sent' });
+            } else if (user.role === 'sub_admin' && !user.subAdminId) {
+                console.warn(`User ${user._id} is a sub_admin but has no subAdminId.`);
+                io.to(messageData.userId.toString()).emit('messageSent', { messageId: message._id, status: 'sent' });
             } else {
                 console.error('Sub-admin not found for user:', messageData.userId);
             }
         } catch (error) {
-            console.error('Error retrieving sub-admin for user:', error.message);
+            console.error('Error saving message:', error.message);
+            socket.emit('error', { message: 'Failed to save message' });
         }
     });
 
@@ -99,9 +127,7 @@ io.on('connection', (socket) => {
                 { status: 'delivered' },
                 { new: true }
             );
-
             if (message) {
-                // Notify only the relevant user and sub-admin
                 io.to(message.userId.toString()).emit('messageStatusUpdate', { messageId, status: 'delivered' });
                 io.to(message.userId.subAdminId.toString()).emit('messageStatusUpdate', { messageId, status: 'delivered' });
             }
@@ -119,7 +145,6 @@ io.on('connection', (socket) => {
                 { status: 'read' },
                 { new: true }
             );
-
             if (message) {
                 io.to(message.userId.toString()).emit('messageStatusUpdate', { messageId, status: 'read' });
                 io.to(message.userId.subAdminId.toString()).emit('messageStatusUpdate', { messageId, status: 'read' });
@@ -129,18 +154,17 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle 'getPendingMessages' event, respond only to the requesting client
+    // Fetch pending messages specifically
     socket.on('getPendingMessages', async () => {
         try {
             const pendingMessages = await Message.find({ status: 'pending' });
-            socket.emit('pendingMessages', pendingMessages);  // Emit only to the requesting client
+            socket.emit('pendingMessages', pendingMessages);
         } catch (error) {
             console.error('Error retrieving pending messages:', error.message);
             socket.emit('error', { message: 'Failed to retrieve pending messages' });
         }
     });
 
-    // Handle disconnection
     socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);
     });
