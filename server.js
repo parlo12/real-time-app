@@ -116,7 +116,7 @@ io.on('connection', (socket) => {
                 origin: message.origin,
 
             });
-                console.log('Message sent to user:', messageData.userId);
+                console.log('Message sent to user:', messageData.userId, message.content, message.origin, message._id, message.sender, message.receiver);
 
             const user = await User.findById(messageData.userId).populate('subAdminId');
             if (user && user.subAdminId) {
