@@ -5,14 +5,40 @@ exports.registerUser = async (req, res) => {
     try {
         const { name, email, role, subAdminId } = req.body;
 
-        // Check if a regular user is being created without a subAdminId
+        // Check if the user already exists
+        const existingUser = await User.findOne({ email });
+
+        if (existingUser) {
+            // If the user already exists, generate and return a login token
+            const token = jwt.sign(
+                { userId: existingUser._id, role: existingUser.role },
+                process.env.JWT_SECRET,
+                { expiresIn: '1h' }
+            );
+
+            const refreshToken = jwt.sign(
+                { userId: existingUser._id, role: existingUser.role },
+                process.env.JWT_SECRET,
+                { expiresIn: '7d' }
+            );
+
+            return res.status(200).json({
+                message: 'User already registered. Logged in successfully.',
+                token,
+                refreshToken,
+                data: existingUser,
+            });
+        }
+
+        // Ensure that a subAdminId is provided to create a regular user
         if (role === 'user' && !subAdminId) {
             return res.status(400).json({ error: 'A subAdminId is required to create a regular user account' });
         }
 
+        // Create a new user
         const user = new User({ name, email, role, subAdminId });
         await user.save();
-        
+
         res.status(201).json({ message: 'User registered successfully', data: user });
     } catch (error) {
         console.error('Error in registerUser:', error);

@@ -35,6 +35,53 @@ const io = socketIo(server, {
     }
 });
 
+// Store active connections (socket ID and email)
+const activeConnections = new Map();
+
+io.on('connection', (socket) => {
+    console.log('New client connected:', socket.id);
+
+    // Handle client identification (e.g., after login)
+    socket.on('identify', async (data) => {
+        const { email } = data;
+
+        if (email) {
+            // Store the email associated with the socket ID
+            activeConnections.set(socket.id, email);
+            console.log(`Client identified: ${email}`);
+        } else {
+            console.warn(`Socket ${socket.id} failed to provide an email`);
+        }
+
+        // Emit the list of active connections to the client (optional)
+        socket.emit('activeConnections', Array.from(activeConnections.values()));
+    });
+
+    // Display all active connections (periodically or on request)
+    socket.on('getActiveConnections', () => {
+        console.log('Active connections:');
+        activeConnections.forEach((email, socketId) => {
+            console.log(` - ${email} (Socket ID: ${socketId})`);
+        });
+
+        // Emit the active connections list to the client
+        socket.emit('activeConnections', Array.from(activeConnections.values()));
+    });
+
+    // Handle client disconnection
+    socket.on('disconnect', () => {
+        console.log('Client disconnected:', socket.id);
+
+        // Remove the disconnected client from active connections
+        if (activeConnections.has(socket.id)) {
+            const email = activeConnections.get(socket.id);
+            console.log(`Removing disconnected client: ${email}`);
+            activeConnections.delete(socket.id);
+        }
+    });
+});
+
+
 // Middleware to attach io to the req object (before routes)
 app.use((req, res, next) => {
     req.io = io;
