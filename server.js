@@ -140,7 +140,7 @@ io.on('connection', (socket) => {
             sender: messageData.sender,
             receiver: messageData.receiver || 'Unknown', // Use "Unknown" if receiver is not provided
             content: messageData.content,
-            status: 'sent',
+            status: 'pending',
             userId: messageData.userId,
             deviceId: deviceId, // Apply default or valid deviceId
             threadId: messageData.threadId || null, // Use existing threadId if provided
@@ -197,7 +197,7 @@ io.on('connection', (socket) => {
                 sender: userId,
                 receiver: originalMessage.sender,
                 content: content,
-                status: 'sent',
+                status: 'pending',
                 userId: userId,
                 deviceId: originalMessage.deviceId,
                 threadId: originalMessage.threadId || originalMessage._id, // Link to the original message's thread
