@@ -1,9 +1,19 @@
 const express = require('express');
 const router = express.Router();
-const UserController = require('../controllers/UserController');
+const { validateApiKey } = require('./authMiddleware');
+const UserController = require('./UserController');
 
-router.post('/register', UserController.registerUser); // Register user endpoint
-router.post('/login', UserController.loginUser);       // Login endpoint
-router.post('/refresh-token', UserController.refreshToken); // Token refresh endpoint
+// Example protected route
+router.get('/profile', validateApiKey, (req, res) => {
+    res.json({
+        message: 'User profile data',
+        user: {
+            email: req.user.email,
+            apiKey: req.user.apiKey,
+        },
+    });
+});
+
+router.post('/register', UserController.register);
 
 module.exports = router;

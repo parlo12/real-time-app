@@ -1,30 +1,22 @@
 // Import necessary modules
-const express = require('express');
 const http = require('http');
 const mongoose = require('mongoose');
 const socketIo = require('socket.io');
-const cors = require('cors');
 const dotenv = require('dotenv');
-const Device = require('./models/Device');
-const Message = require('./models/Message'); // <-- Import Message model
-const messageRoutes = require('./routes/messageRoutes');
-const userRoutes = require('./routes/userRoutes');
-const User = require('./models/User'); // <-- Import User model
-const deviceRoutes = require('./routes/deviceRoutes');
+const crypto = require('crypto');
+const express = require('express');
+const bodyParser = require('body-parser');
+const Message = require('./models/Message'); // Message model
+const User = require('./models/User'); // User model
 
 // Load environment variables from .env file
 dotenv.config();
 
-// Initialize Express app
+// Initialize Express app for HTTP endpoints
 const app = express();
+app.use(bodyParser.json());
 
-// Enable CORS
-app.use(cors());
-
-// Enable JSON body parsing
-app.use(express.json());
-
-// Set up a basic HTTP server using the Express app
+// Set up a basic HTTP server
 const server = http.createServer(app);
 
 // Initialize Socket.IO with the server
@@ -35,239 +27,193 @@ const io = socketIo(server, {
     }
 });
 
-// Store active connections (socket ID and email)
-const activeConnections = new Map();
+// Map to track connected devices by API key
+const connectedDevices = {};
 
+// WebSocket connection handler
 io.on('connection', (socket) => {
-    console.log('New client connected:', socket.id);
+    console.log(`New client connected: ${socket.id} at ${new Date().toISOString()}`);
 
-    // Handle client identification (e.g., after login)
-    socket.on('identify', async (data) => {
-        const { email } = data;
+    // Authenticate using API key during connection
+    socket.on('authenticate', async ({ apiKey, clientType }) => {
+        try {
+            const user = await User.findOne({ apiKey });
+            if (!user) {
+                console.error(`Authentication failed for client ${socket.id} with API key: ${apiKey}`);
+                socket.emit('error', { message: 'Invalid API key' });
+                socket.disconnect();
+                return;
+            }
+            console.log(`User authenticated: ${user.email} (Client ID: ${socket.id}, Type: ${clientType})`);
 
-        if (email) {
-            // Store the email associated with the socket ID
-            activeConnections.set(socket.id, email);
-            console.log(`Client identified: ${email}`);
-        } else {
-            console.warn(`Socket ${socket.id} failed to provide an email`);
-        }
+            socket.user = user;
+            socket.clientType = clientType;
 
-        // Emit the list of active connections to the client (optional)
-        socket.emit('activeConnections', Array.from(activeConnections.values()));
-    });
+            // Register device if client is an Android device
+            if (clientType === 'device') {
+                if (!connectedDevices[apiKey]) {
+                    connectedDevices[apiKey] = [];
+                }
+                connectedDevices[apiKey].push(socket);
+                console.log(`Device registered for API key: ${apiKey}`);
+            }
 
-    // Display all active connections (periodically or on request)
-    socket.on('getActiveConnections', () => {
-        console.log('Active connections:');
-        activeConnections.forEach((email, socketId) => {
-            console.log(` - ${email} (Socket ID: ${socketId})`);
-        });
-
-        // Emit the active connections list to the client
-        socket.emit('activeConnections', Array.from(activeConnections.values()));
-    });
-
-    // Handle client disconnection
-    socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-
-        // Remove the disconnected client from active connections
-        if (activeConnections.has(socket.id)) {
-            const email = activeConnections.get(socket.id);
-            console.log(`Removing disconnected client: ${email}`);
-            activeConnections.delete(socket.id);
+            // Join the user's room for personalized messaging
+            socket.join(user._id.toString());
+        } catch (error) {
+            console.error(`Authentication error for client ${socket.id}: ${error.message}`);
+            socket.emit('error', { message: 'Authentication failed' });
         }
     });
-});
 
-
-// Middleware to attach io to the req object (before routes)
-app.use((req, res, next) => {
-    req.io = io;
-    next();
-});
-
-// Set up routes
-app.use('/messages', messageRoutes);
-app.use('/users', userRoutes);
-app.use('/devices', deviceRoutes);
-
-io.on('connection', (socket) => {
-    console.log('New client connected:', socket.id);
-
-    // Handle joining a room when the user connects and identifies themselves
-    socket.on('joinRoom', ({ userId, role }) => {
-        const roomId = userId.toString();
-        socket.join(roomId);
-        console.log(`User ${userId} with role ${role} joined room ${roomId}`);
-    });
-
-    // Ensure `getAllMessages` receives `userId` and `role`
-    socket.on('getAllMessages', async (data = {}) => {
-        const { userId, role } = data;
-
-        if (!userId || !role) {
-            console.error("User ID or role missing for 'getAllMessages' event");
-            socket.emit('error', { message: 'User ID and role are required to fetch messages' });
+    // Register device with phone number
+    socket.on('registerDevice', async ({ phoneNumber }) => {
+        if (!socket.user || socket.clientType !== 'device') {
+            console.error(`Registration failed: Invalid client type (Client ID: ${socket.id})`);
+            socket.emit('error', { message: 'Only devices can register phone numbers' });
             return;
         }
 
         try {
-            let messages;
-            if (role === 'super_admin') {
-                messages = await Message.find(); // Fetch all messages for super admin
-            } else {
-                messages = await Message.find({
-                    $or: [{ userId: userId }, { receiver: userId }]
-                });
-            }
-            socket.emit('allMessages', messages);
+            console.log(`Device registered with phone number: ${phoneNumber} for user: ${socket.user.email}`);
+            socket.devicePhoneNumber = phoneNumber; // Store it in the socket object
         } catch (error) {
-            console.error('Error fetching all messages:', error.message);
-            socket.emit('error', { message: 'Failed to retrieve all messages' });
+            console.error(`Error registering device for client ${socket.id}: ${error.message}`);
+            socket.emit('error', { message: 'Failed to register device' });
         }
     });
 
-    // Handle the 'message' event with default handling for `deviceId`
-    socket.on('message', async (messageData) => {
-        console.log('Message received on server:', messageData);
-
-        // Check if deviceId is valid or use a default value (e.g., `null` if optional)
-        const deviceId = mongoose.isValidObjectId(messageData.deviceId) ? messageData.deviceId : null;
-
-        const message = new Message({
-            sender: messageData.sender,
-            receiver: messageData.receiver || 'Unknown', // Use "Unknown" if receiver is not provided
-            content: messageData.content,
-            status: 'sent',
-            userId: messageData.userId,
-            deviceId: deviceId, // Apply default or valid deviceId
-            threadId: messageData.threadId || null, // Use existing threadId if provided
-            origin: messageData.origin || 'CRM' // Assume CRM as the origin if not provided
-        });
-
-    
-
+    // Handle message sending
+    socket.on('sendMessage', async (messageData) => {
         try {
-            await message.save();
-
-            // need to know which service is sending message is it CRM or Android
-           //event emit to userID
-            io.emit(`${messageData.userId}`, { 
-                messageId: message._id,
-                status: 'sent',
-                content: message.content,
-                sender: message.sender,
-                receiver: message.receiver,
-                origin: message.origin,
-
-            });
-                console.log('Message sent to user:', messageData.userId, message.content, message.origin, message._id, message.sender, message.receiver);
-
-            const user = await User.findById(messageData.userId).populate('subAdminId');
-            if (user && user.subAdminId) {
-                const subAdminId = user.subAdminId._id;
-                io.to(messageData.userId.toString()).emit('messageSent', { messageId: message._id, status: 'sent' });
-                io.to(subAdminId.toString()).emit('messageSent', { messageId: message._id, status: 'sent' });
-            } else if (user.role === 'sub_admin' && !user.subAdminId) {
-                console.warn(`User ${user._id} is a sub_admin but has no subAdminId.`);
-                io.to(messageData.userId.toString()).emit('messageSent', { messageId: message._id, status: 'sent' });
-            } else {
-                console.error('Sub-admin not found for user:', messageData.userId);
-            }
-        } catch (error) {
-            console.error('Error saving message:', error.message);
-            socket.emit('error', { message: 'Failed to save message' });
-        }
-    });
-
-    // Handle 'replyMessage' event to handle replies
-    socket.on('replyMessage', async (replyData) => {
-        const { originalMessageId, content, userId, origin } = replyData;
-
-        try {
-            const originalMessage = await Message.findById(originalMessageId);
-            if (!originalMessage) {
-                console.error('Original message not found.');
+            if (!socket.user || socket.clientType !== 'crm') {
+                socket.emit('error', { message: 'Only CRM clients can send messages' });
                 return;
             }
 
-            const replyMessage = new Message({
-                sender: userId,
-                receiver: originalMessage.sender,
-                content: content,
-                status: 'sent',
-                userId: userId,
-                deviceId: originalMessage.deviceId,
-                threadId: originalMessage.threadId || originalMessage._id, // Link to the original message's thread
-                origin: origin || 'CRM' // Default to CRM if origin not specified
-            });
-
-            await replyMessage.save();
-
-            // Emit to both the original sender's and receiver's rooms
-            io.to(originalMessage.sender.toString()).emit('newReply', replyMessage);
-            io.to(userId.toString()).emit('newReply', replyMessage);
-
-        } catch (error) {
-            console.error('Error handling reply message:', error.message);
-        }
-    });
-
-    // Handle 'messageDelivered' event
-    socket.on('messageDelivered', async (data) => {
-        const { messageId } = data;
-        try {
-            const message = await Message.findByIdAndUpdate(
-                messageId,
-                { status: 'delivered' },
-                { new: true }
-            );
-            if (message) {
-                io.to(message.userId.toString()).emit('messageStatusUpdate', { messageId, status: 'delivered' });
-                io.to(message.userId.subAdminId.toString()).emit('messageStatusUpdate', { messageId, status: 'delivered' });
+            const deviceSockets = connectedDevices[socket.user.apiKey];
+            if (!deviceSockets || deviceSockets.length === 0) {
+                socket.emit('error', { message: 'No devices registered for this API key' });
+                return;
             }
+
+            // Forward the message to the first connected device
+            const targetDevice = deviceSockets[0];
+            targetDevice.emit('sendSms', messageData);
+
+            console.log(`Message from CRM forwarded to device:`, messageData);
         } catch (error) {
-            console.error('Error updating message to delivered:', error.message);
+            console.error(`Error sending message for client ${socket.id}: ${error.message}`);
+            socket.emit('error', { message: 'Failed to send message' });
         }
     });
 
-    // Handle 'messageRead' event
-    socket.on('messageRead', async (data) => {
-        const { messageId } = data;
+    // Handle message replies
+    socket.on('replyMessage', async (replyData) => {
         try {
-            const message = await Message.findByIdAndUpdate(
-                messageId,
-                { status: 'read' },
-                { new: true }
-            );
-            if (message) {
-                io.to(message.userId.toString()).emit('messageStatusUpdate', { messageId, status: 'read' });
-                io.to(message.userId.subAdminId.toString()).emit('messageStatusUpdate', { messageId, status: 'read' });
+            if (!socket.user || socket.clientType !== 'crm') {
+                socket.emit('error', { message: 'Only CRM clients can send replies' });
+                return;
             }
+
+            const deviceSockets = connectedDevices[socket.user.apiKey];
+            if (!deviceSockets || deviceSockets.length === 0) {
+                socket.emit('error', { message: 'No devices registered for this API key' });
+                return;
+            }
+
+            // Forward the reply to the device
+            const targetDevice = deviceSockets[0];
+            targetDevice.emit('replySms', replyData);
+
+            console.log(`Reply from CRM forwarded to device:`, replyData);
         } catch (error) {
-            console.error('Error updating message to read:', error.message);
+            console.error(`Error sending reply for client ${socket.id}: ${error.message}`);
+            socket.emit('error', { message: 'Failed to send reply' });
         }
     });
 
-    // Fetch pending messages specifically
+    // Handle fetching pending messages
     socket.on('getPendingMessages', async () => {
         try {
-            const pendingMessages = await Message.find({ status: 'pending' });
+            if (!socket.user) {
+                socket.emit('error', { message: 'User not authenticated' });
+                return;
+            }
+
+            const pendingMessages = await Message.find({ status: 'pending', receiver: socket.user._id });
             socket.emit('pendingMessages', pendingMessages);
+            console.log(`Pending messages sent to user ${socket.user.email}`);
         } catch (error) {
-            console.error('Error retrieving pending messages:', error.message);
+            console.error(`Error retrieving pending messages for client ${socket.id}: ${error.message}`);
             socket.emit('error', { message: 'Failed to retrieve pending messages' });
         }
     });
 
+    // Handle getAllMessages event
+    socket.on('getAllMessages', async () => {
+        try {
+            if (!socket.user) {
+                socket.emit('error', { message: 'User not authenticated' });
+                return;
+            }
+
+            const messages = await Message.find({
+                $or: [
+                    { sender: socket.devicePhoneNumber }, // Messages sent by the device
+                    { receiver: socket.devicePhoneNumber } // Messages received by the device
+                ]
+            });
+
+            socket.emit('allMessages', messages);
+            console.log(`All messages sent to user ${socket.user.email}`);
+        } catch (error) {
+            console.error(`Error retrieving all messages for client ${socket.id}: ${error.message}`);
+            socket.emit('error', { message: 'Failed to retrieve all messages' });
+        }
+    });
+
+    // Handle disconnect
     socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
+        console.log(`Client disconnected: ${socket.id}`);
+        if (socket.clientType === 'device' && socket.user) {
+            const deviceSockets = connectedDevices[socket.user.apiKey];
+            if (deviceSockets) {
+                connectedDevices[socket.user.apiKey] = deviceSockets.filter((s) => s.id !== socket.id);
+                console.log(`Device disconnected for API key: ${socket.user.apiKey}`);
+            }
+        }
     });
 });
 
-// Define a basic route to verify server is running
+// HTTP Endpoint for user registration
+app.post('/register', async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    try {
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(409).json({ message: 'Email already registered' });
+        }
+
+        const apiKey = crypto.randomBytes(32).toString('hex');
+
+        const user = new User({ email, password, apiKey });
+        await user.save();
+
+        console.log(`User registered: ${email} with API key: ${apiKey}`);
+        res.status(201).json({ message: 'User registered successfully', apiKey });
+    } catch (error) {
+        console.error('Error registering user:', error.message);
+        res.status(500).json({ message: 'Failed to register user' });
+    }
+});
+
+// Basic server route
 app.get('/', (req, res) => {
     res.send('WebSocket API server is running');
 });
@@ -275,7 +221,7 @@ app.get('/', (req, res) => {
 // Start the server
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`WebSocket server is running on port ${PORT}`);
 });
 
 // Connect to MongoDB

@@ -1,49 +1,22 @@
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const User = require('../models/User.js');
 
-exports.isAuthenticated = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-
-    if (!token) {
-        return res.status(401).json({ error: 'Unauthorized: No token provided' });
+// Middleware to validate API key
+module.exports.validateApiKey = async (req, res, next) => {
+    const apiKey = req.headers['x-api-key']; // Extract API key from request headers
+    if (!apiKey) {
+        return res.status(401).json({ error: 'API key is required' });
     }
 
-    jwt.verify(token, process.env.JWT_SECRET, async (err, decoded) => {
-        if (err) {
-            return res.status(403).json({ error: 'Failed to authenticate token' });
-        }
-
-        // Attach user information to req.user
-        req.user = { userId: decoded.userId, role: decoded.role };
-
-        // Log decoded token info for debugging
-        console.log('Decoded JWT:', decoded);
-
-        const user = await User.findById(decoded.userId);
+    try {
+        const user = await User.findOne({ apiKey });
         if (!user) {
-            return res.status(401).json({ error: 'Unauthorized: Invalid user' });
+            return res.status(403).json({ error: 'Invalid API key' });
         }
 
+        req.user = user; // Attach user to the request object
         next();
-    });
-};
-
-
-// Middleware to check if the user is a Sub Admin
-exports.isSubAdmin = async (req, res, next) => {
-    if (req.user && req.user.role === 'sub_admin') {
-        next(); // Proceed if the role is Sub Admin
-    } else {
-        res.status(403).json({ error: 'Access denied: Requires Sub Admin role' });
-    }
-};
-
-// Middleware to check if the user is a Super Admin
-exports.isSuperAdmin = async (req, res, next) => {
-    if (req.user && req.user.role === 'super_admin') {
-        next(); // Proceed if the role is Super Admin
-    } else {
-        res.status(403).json({ error: 'Access denied: Requires Super Admin role' });
+    } catch (error) {
+        console.error('Error validating API key:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
 };
