@@ -30,6 +30,17 @@ const io = socketIo(server, {
 // Map to track connected devices by API key
 const connectedDevices = {};
 
+// Define the authenticateApiKey function
+const authenticateApiKey = async (apiKey) => {
+    try {
+        const user = await User.findOne({ apiKey }).exec();
+        return user;
+    } catch (error) {
+        console.error('Error in authenticateApiKey:', error);
+        return null;
+    }
+};
+
 // WebSocket connection handler
 io.on('connection', (socket) => {
     console.log(`New client connected: ${socket.id} at ${new Date().toISOString()}`);
@@ -37,32 +48,17 @@ io.on('connection', (socket) => {
     // Authenticate using API key during connection
     socket.on('authenticate', async ({ apiKey, clientType }) => {
         try {
-            const user = await User.findOne({ apiKey });
-            if (!user) {
-                console.error(`Authentication failed for client ${socket.id} with API key: ${apiKey}`);
-                socket.emit('error', { message: 'Invalid API key' });
-                socket.disconnect();
-                return;
+            const user = await authenticateApiKey(apiKey);
+            if (user) {
+                socket.user = user;
+                socket.join(user._id.toString()); // Join room based on user ID
+                console.log(`User ${user.email} authenticated and joined room ${user._id}`);
+            } else {
+                socket.emit('error', { message: 'Authentication failed' });
             }
-            console.log(`User authenticated: ${user.email} (Client ID: ${socket.id}, Type: ${clientType})`);
-
-            socket.user = user;
-            socket.clientType = clientType;
-
-            // Register device if client is an Android device
-            if (clientType === 'device') {
-                if (!connectedDevices[apiKey]) {
-                    connectedDevices[apiKey] = [];
-                }
-                connectedDevices[apiKey].push(socket);
-                console.log(`Device registered for API key: ${apiKey}`);
-            }
-
-            // Join the user's room for personalized messaging
-            socket.join(user._id.toString());
         } catch (error) {
-            console.error(`Authentication error for client ${socket.id}: ${error.message}`);
-            socket.emit('error', { message: 'Authentication failed' });
+            console.error('Authentication error:', error);
+            socket.emit('error', { message: 'Authentication error' });
         }
     });
 
@@ -86,24 +82,11 @@ io.on('connection', (socket) => {
     // Handle message sending
     socket.on('sendMessage', async (messageData) => {
         try {
-            if (!socket.user || socket.clientType !== 'crm') {
-                socket.emit('error', { message: 'Only CRM clients can send messages' });
-                return;
-            }
-
-            const deviceSockets = connectedDevices[socket.user.apiKey];
-            if (!deviceSockets || deviceSockets.length === 0) {
-                socket.emit('error', { message: 'No devices registered for this API key' });
-                return;
-            }
-
-            // Forward the message to the first connected device
-            const targetDevice = deviceSockets[0];
-            targetDevice.emit('sendSms', messageData);
-
-            console.log(`Message from CRM forwarded to device:`, messageData);
+            const message = await Message.create(messageData);
+            emitToUser(message.receiver.toString(), 'newMessage', message);
+            console.log(`Message sent to user ${message.receiver}`);
         } catch (error) {
-            console.error(`Error sending message for client ${socket.id}: ${error.message}`);
+            console.error('SendMessage error:', error);
             socket.emit('error', { message: 'Failed to send message' });
         }
     });
@@ -232,3 +215,8 @@ mongoose.connect(process.env.MONGO_URI)
     .catch((error) => {
         console.error('Error connecting to MongoDB:', error.message);
     });
+
+// Emitting to the user's room instead of individual socket
+const emitToUser = (userId, event, data) => {
+    io.to(userId.toString()).emit(event, data);
+};
